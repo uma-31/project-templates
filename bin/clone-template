@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+
+set -e
+
+PROJECT_TEMPLATES_ROOT="$(cd "$(dirname "$0")"; cd ..; pwd)"
+TEMPLATES_DIRECTORY="$PROJECT_TEMPLATES_ROOT/templates"
+
+function error() {
+  echo -e "\033[31m$1\033[m" >&2
+}
+
+function warn() {
+  echo -e "\033[33m$1\033[m"
+}
+
+function usage() {
+  echo
+  echo 'clone-template [option] <template> <dest>'
+  echo
+  echo 'options:'
+  echo '  --create-repository       Create remote repository (GitHub).'
+  echo
+  echo '  --repository-name <name>  Specify the name of the remote repository.'
+  echo
+  echo '  --public                  Create public repository.'
+  echo '                            This option should be used with --create-repository.'
+  echo
+  echo '  -h                        Display help.'
+  echo
+  echo 'available templates:'
+  echo -n '  '
+
+  ls "$TEMPLATES_DIRECTORY" | while read file_or_directory; do
+    if [ -d "$TEMPLATES_DIRECTORY/$file_or_directory" ]; then
+      echo -n " $file_or_directory"
+    fi
+  done
+
+  echo
+  echo
+}
+
+function require_command() {
+  if ! type "$1" &> /dev/null; then
+    echo "error: '$1' command is required but not installed."
+    exit 1
+  fi
+}
+
+function is-template() {
+  test -d "$TEMPLATES_DIRECTORY/$1"
+}
+
+require_command 'git'
+
+OPTS_ARGS=($(getopt -o h -l create-repository,repository-name:,public,help -n `basename "$0"` -u -- "$@" 2> >(while read line; do
+  error "$line"
+done)))
+
+is_opt='true'
+
+OPTS=()
+ARGS=()
+
+for item in "${OPTS_ARGS[@]}"; do
+  if [ "$item" = '--' ]; then
+    is_opt='false'
+    continue
+  fi
+
+  if [ "$is_opt" = 'true' ]; then
+    OPTS+=("$item")
+  else
+    ARGS+=("$item")
+  fi
+done
+
+create_repository='false'
+repository_visibility='private'
+
+for ((i=0; i<${#OPTS[@]}; i++)); do
+  OPT="${OPTS[$i]}"
+
+  case "$OPT" in
+    '--create-repository' )
+      create_repository='true'
+      ;;
+    '--repository-name' )
+      ((i++))
+      repository_name="${OPTS[$i]}"
+      ;;
+    '--public' )
+      repository_visibility='public'
+      ;;
+    '-h' | '--help' )
+      usage
+      exit 0
+      ;;
+  esac
+done
+
+if [ ${#ARGS[@]} -lt 2 ]; then
+  error 'error: You have to specify template name and dest directory path.'
+  exit 1
+elif [ ${#ARGS[@]} -gt 2 ]; then
+  error 'error: Too many arguments are given.'
+  exit 1
+fi
+
+template="${ARGS[0]}"
+dest="${ARGS[1]}"
+
+if [ ! -v 'repository_name' ]; then
+  repository_name="$dest"
+fi
+
+if ! is-template "$template"; then
+  error "error: '$template' is not an available template."
+  exit 1
+elif [ -d "$dest" ]; then
+  error "error: '$dest' is already exists."
+  exit 1
+fi
+
+if [ "$repository_visibility" = 'public' ] && [ "$create_repository" = 'false' ]; then
+  warn "warn: '--public' opion should be called with '--create-repository' option."
+fi
+
+cp -r "$TEMPLATES_DIRECTORY/$template" "$dest"
+cd "$dest"
+
+git init
+git add .
+
+if [ ! -v 'GIT_INIT_MSG' ]; then
+  GIT_INIT_MSG='Initial Commit'
+fi
+
+git commit -m "$GIT_INIT_MSG"
+
+if [ "$create_repository" = 'true' ]; then
+  require_command 'gh'
+
+  eval "gh repo create '$repository_name' --$repository_visibility --push --remote=origin --source=."
+  echo
+  echo "Remote Repository: $(git remote get-url origin | sed 's/:/\//' | sed 's/git@github.com/https:\/\/github.com/')"
+  echo
+fi
